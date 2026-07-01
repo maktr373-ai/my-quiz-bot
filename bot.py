@@ -1,4 +1,4 @@
-import telebot
+Pahile import telebot
 import csv
 import io
 import threading
@@ -6,12 +6,14 @@ import time
 import os
 from flask import Flask
 from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime
 
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Quiz Bot is running perfectly!"
+    return "Quiz Bot is 24x7 Awake and Running!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -20,9 +22,15 @@ def run_flask():
 BOT_TOKEN = "8943398504:AAGIjt1WrTe5wivSDU9tqtWSO97DM9FN2iQ" 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Global data storage
 uploaded_quizzes = {}
 user_sessions = {}
 temp_csv_data = {}
+revision_configs = {} # Store user revision settings
+
+# Initialize Background Scheduler for Revision Mode
+scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
+scheduler.start()
 
 def set_bot_commands():
     try:
@@ -55,8 +63,7 @@ def start_message(message):
         "⚙️ *Kaise use karein:*\n"
         "1. `/csv_to_quiz` par click karein.\n"
         "2. Apni `.csv` file bot ko bhejein.\n"
-        "3. Quiz ka ek Title (Naam) type karke bhejein.\n"
-        "4. Standard Mode choose karke apna Shareable Quiz Card taiyar karein!"
+        "3. Quiz ka ek Title (Naam) type karke bhejein."
     )
     bot.send_message(chat_id, welcome_text, parse_mode="Markdown")
 
@@ -102,7 +109,6 @@ def handle_csv_upload(message):
         
         for row in rows[start_idx:]:
             row = [item.strip() for item in row if item.strip()]
-            
             if len(row) >= 6:
                 q_text = row[0]
                 opts = row[1:5]
@@ -162,10 +168,10 @@ def save_quiz_title(message):
     }
     del temp_csv_data[chat_id]
     
-    # Mode puchne ke liye buttons
+    # Selection Screen between Standard and AUTO-QUIZ
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("⚙️ Standard Mode", callback_data=f"mode_standard_{quiz_id}"))
-    markup.add(InlineKeyboardButton("🔒 Live Mode (Coming Soon)", callback_data="mode_live_soon"))
+    markup.add(InlineKeyboardButton("🤖 AUTO-QUIZ MODE", callback_data=f"mode_auto_{quiz_id}"))
     
     bot.send_message(
         chat_id, 
@@ -174,25 +180,205 @@ def save_quiz_title(message):
         parse_mode="Markdown"
     )
 
-# FIX: Mode selection callback handling code updated
+# Callback handler for Main Modes
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
-def handle_modes(call):
+def handle_main_modes(call):
     chat_id = call.message.chat.id
-    if call.data == "mode_live_soon":
-        bot.answer_callback_query(call.id, "Live mode abhi under development hai! Kripya Standard Mode chunein.", show_alert=True)
-        return
-        
-    quiz_id = call.data.replace('mode_standard_', '')
-    if quiz_id not in uploaded_quizzes:
-        bot.send_message(chat_id, "⚠️ Quiz data nahi mila.")
-        return
-        
     try:
         bot.delete_message(chat_id, call.message.message_id)
     except:
         pass
-    show_quiz_card(chat_id, quiz_id)
+        
+    if call.data.startswith("mode_standard_"):
+        quiz_id = call.data.replace('mode_standard_', '')
+        show_quiz_card(chat_id, quiz_id)
+        
+    elif call.data.startswith("mode_auto_"):
+        quiz_id = call.data.replace('mode_auto_', '')
+        
+        # Sub-menu inside AUTO-QUIZ
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("📝 Practice Mode", callback_data=f"practice_menu_{quiz_id}"))
+        markup.add(InlineKeyboardButton("🔒 Live Mode (Under Dev)", callback_data="live_mode_dev"))
+        
+        bot.send_message(
+            chat_id,
+            "🤖 *AUTO-QUIZ MODE SELECTION*\n\nNiche diye gaye options mein se chunein:",
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
 
+@bot.callback_query_handler(func=lambda call: call.data == "live_mode_dev")
+def live_mode_dev_alert(call):
+    bot.answer_callback_query(call.id, "Live Mode abhi under development hai! Kripya Practice Mode ka upyog karein.", show_alert=True)
+
+# Callback handler for Practice Sub-Menu
+@bot.callback_query_handler(func=lambda call: call.data.startswith('practice_menu_'))
+def handle_practice_menu(call):
+    chat_id = call.message.chat.id
+    quiz_id = call.data.replace('practice_menu_', '')
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except:
+        pass
+        
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("⚡ Flash Quiz (No Timer)", callback_data=f"flash_run_{quiz_id}"))
+    markup.add(InlineKeyboardButton("🔄 Revision Mode", callback_data=f"revision_setup_{quiz_id}"))
+    
+    bot.send_message(
+        chat_id,
+        "📝 *PRACTICE MODE OPTIONS*\n\n"
+        "⚡ *Flash Quiz:* Saare sawal bina timer ke ek sath flash honge.\n"
+        "🔄 *Revision Mode:* Fixed daily limit aur daily time par automated test chalega.",
+        reply_markup=markup,
+        parse_mode="Markdown"
+    )
+
+# --- ⚡ FLASH QUIZ FUNCTIONALITY ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('flash_run_'))
+def run_flash_quiz(call):
+    chat_id = call.message.chat.id
+    quiz_id = call.data.replace('flash_run_', '')
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except:
+        pass
+        
+    if quiz_id not in uploaded_quizzes:
+        bot.send_message(chat_id, "⚠️ Quiz data nahi mila.")
+        return
+        
+    questions = uploaded_quizzes[quiz_id]["questions"]
+    title = uploaded_quizzes[quiz_id]["title"]
+    
+    bot.send_message(chat_id, f"⚡ *Flash Quiz Shuru!* (Topic: `{title}`)\nSaare sawal niche aa rahe hain. Bina timer ke aaram se solve karein: 👇", parse_mode="Markdown")
+    
+    # Instantly dispatch all polls without open_period timer
+    for idx, q_data in enumerate(questions):
+        try:
+            bot.send_poll(
+                chat_id=chat_id,
+                question=f"❓ {q_data['question']}"[:250],
+                options=q_data["options"][:100],
+                type='quiz',
+                correct_option_id=q_data["correct"],
+                is_anonymous=False
+            )
+            time.sleep(0.5) # Smooth distribution gap
+        except:
+            pass
+
+# --- 🔄 REVISION MODE SETUP ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('revision_setup_'))
+def setup_revision_mode(call):
+    chat_id = call.message.chat.id
+    quiz_id = call.data.replace('revision_setup_', '')
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except:
+        pass
+        
+    revision_configs[chat_id] = {"quiz_id": quiz_id}
+    msg = bot.send_message(chat_id, "🕒 *Revision Ka Time (IST) Set Karein!*\n\nKripya daily test bhejne ka samay type karein. Format -> `HH:MM` (Jaise raat ke 9 baje ke liye: `21:00` ya subah 9 baje ke liye `09:00`):")
+    bot.register_next_step_handler(msg, process_revision_time)
+
+def process_revision_time(message):
+    chat_id = message.chat.id
+    time_str = message.text.strip()
+    
+    try:
+        datetime.strptime(time_str, "%H:%M") # Format validation
+        revision_configs[chat_id]["time"] = time_str
+        msg = bot.send_message(chat_id, "🔢 *Daily Limit Set Karein!*\n\nRozana revision mein kitne questions bhejne hain? Ek sankhya (number) bheinjein (e.g., `5`, `10`, `15`):")
+        bot.register_next_step_handler(msg, process_revision_limit)
+    except:
+        msg = bot.send_message(chat_id, "❌ Galat format! Kripya sahi format `HH:MM` (e.g. `21:30`) mein hi samay bhejein:")
+        bot.register_next_step_handler(msg, process_revision_time)
+
+def process_revision_limit(message):
+    chat_id = message.chat.id
+    limit_str = message.text.strip()
+    
+    if not limit_str.isdigit() or int(limit_str) <= 0:
+        msg = bot.send_message(chat_id, "❌ Kripya ek valid number bhejein (Jaise 5 ya 10):")
+        bot.register_next_step_handler(msg, process_revision_limit)
+        return
+        
+    limit = int(limit_str)
+    revision_configs[chat_id]["limit"] = limit
+    revision_configs[chat_id]["current_pointer"] = 0 # Track which question index to send next
+    
+    config = revision_configs[chat_id]
+    quiz_id = config["quiz_id"]
+    quiz_title = uploaded_quizzes[quiz_id]["title"]
+    r_time = config["time"]
+    
+    # Schedule the Automated Cron Job for this user
+    hour, minute = map(int, r_time.split(":"))
+    job_id = f"rev_{chat_id}"
+    
+    # If a job already exists for this user, remove it first
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+        
+    scheduler.add_job(
+        send_daily_revision, 
+        'cron', 
+        hour=hour, 
+        minute=minute, 
+        id=job_id, 
+        args=[chat_id]
+    )
+    
+    success_text = (
+        f"✅ *Revision Mode successfully activated!*\n\n"
+        f"📌 *Quiz:* `{quiz_title}`\n"
+        f"🕒 *Daily Time:* `{r_time} IST`\n"
+        f"📊 *Daily Question Limit:* `{limit}`\n\n"
+        f"Bot rozana is samay par automatic questions bhejta rahega."
+    )
+    bot.send_message(chat_id, success_text, parse_mode="Markdown")
+
+def send_daily_revision(chat_id):
+    config = revision_configs.get(chat_id)
+    if not config: return
+    
+    quiz_id = config["quiz_id"]
+    if quiz_id not in uploaded_quizzes: return
+    
+    questions = uploaded_quizzes[quiz_id]["questions"]
+    pointer = config["current_pointer"]
+    limit = config["limit"]
+    title = uploaded_quizzes[quiz_id]["title"]
+    
+    if pointer >= len(questions):
+        bot.send_message(chat_id, f"🔄 *Revision Complete!* `{title}` ke saare questions pure ho gaye hain. Naya schedule karne ke liye naya CSV upload karein.")
+        scheduler.remove_job(f"rev_{chat_id}")
+        return
+
+    bot.send_message(chat_id, f"🔄 *Today's Revision Test Live!* (Topic: `{title}`)\nTaiyar ho jaiye: 👇", parse_mode="Markdown")
+    
+    end_pointer = min(pointer + limit, len(questions))
+    for i in range(pointer, end_pointer):
+        q_data = questions[i]
+        try:
+            bot.send_poll(
+                chat_id=chat_id,
+                question=f"🔄 {q_data['question']}"[:250],
+                options=q_data["options"][:100],
+                type='quiz',
+                correct_option_id=q_data["correct"],
+                is_anonymous=False
+            )
+            time.sleep(1)
+        except:
+            pass
+            
+    config["current_pointer"] = end_pointer
+    revision_configs[chat_id] = config
+
+# --- ⚙️ STANDARD MODE CORE FUNCTIONALITY ---
 def show_quiz_card(chat_id, quiz_id):
     quiz_data = uploaded_quizzes[quiz_id]
     title = quiz_data["title"]
@@ -303,7 +489,7 @@ def show_result(chat_id):
     score = user_data["score"]
     quiz_id = user_data["quiz_id"]
     title = uploaded_quizzes[quiz_id]["title"]
-    total = len(uploaded_quizzes[uploaded_quizzes]["questions"] if quiz_id in uploaded_quizzes else user_data.get("questions", [])) if not uploaded_quizzes.get(quiz_id) else len(uploaded_quizzes[quiz_id]["questions"])
+    total = len(uploaded_quizzes[quiz_id]["questions"])
     
     correct = score
     wrong = total - correct
@@ -321,10 +507,8 @@ def show_result(chat_id):
     )
     
     bot.send_message(chat_id, result_text, parse_mode="Markdown")
-    time.sleep(1)
-    
-    show_quiz_card(chat_id, quiz_id)
-    if chat_id in user_sessions: del user_sessions[chat_id]
+    if chat_id in user_sessions: 
+        del user_sessions[chat_id]
 
 @bot.message_handler(commands=['quiz'])
 def menu_quiz_call(message):
