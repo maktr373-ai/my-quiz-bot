@@ -20,7 +20,6 @@ def run_flask():
 BOT_TOKEN = "8943398504:AAGIjt1WrTe5wivSDU9tqtWSO97DM9FN2iQ" 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# In-memory storage (Note: Render restart par yeh reset ho sakta hai)
 uploaded_quizzes = {}
 user_sessions = {}
 temp_csv_data = {}
@@ -30,7 +29,7 @@ def set_bot_commands():
         commands = [
             BotCommand("start", "🤖 Bot ko shuru karein"),
             BotCommand("csv_to_quiz", "📁 CSV file se quiz banayein"),
-            BotCommand("quiz", "🎯 Apna banaya hua Quiz chalayein")
+            BotCommand("quiz", "🎯 Active Quiz Panel open karein")
         ]
         bot.set_my_commands(commands)
     except Exception as e:
@@ -38,15 +37,16 @@ def set_bot_commands():
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    # Agar user share button se ya direct quiz shuru karne aaya hai
+    chat_id = message.chat.id
     text_args = message.text.split()
-    if len(parts := text_args) > 1 and parts[1].startswith('startquiz_'):
-        quiz_id = parts[1].replace('startquiz_', '')
+    
+    if len(text_args) > 1 and text_args[1].startswith('startquiz_'):
+        quiz_id = text_args[1].replace('startquiz_', '')
         if quiz_id in uploaded_quizzes:
-            trigger_quiz_start(message.chat.id, quiz_id)
+            trigger_quiz_start(chat_id, quiz_id)
             return
         else:
-            bot.send_message(message.chat.id, "⚠️ Yeh quiz abhi available nahi hai ya expire ho chuka hai.")
+            bot.send_message(chat_id, "⚠️ Yeh quiz abhi available nahi hai ya expire ho chuka hai.")
             return
 
     welcome_text = (
@@ -58,7 +58,7 @@ def start_message(message):
         "3. Quiz ka ek Title (Naam) type karke bhejein.\n"
         "4. Standard Mode choose karke apna Shareable Quiz Card taiyar karein!"
     )
-    bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
+    bot.send_message(chat_id, welcome_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['csv_to_quiz'])
 def ask_for_csv(message):
@@ -136,11 +136,11 @@ def handle_csv_upload(message):
             })
         
         if not questions_list:
-            bot.send_message(chat_id, "❌ CSV file read karne mein dikkat aayi. Kripya file check karein.")
+            bot.send_message(chat_id, "❌ CSV file read karne mein dikkat aayi.")
             return
 
         temp_csv_data[chat_id] = questions_list
-        msg = bot.send_message(chat_id, f"📝 *Sawal process ho gaye hain! (Total: {len(questions_list)})*\n\nAb is Quiz ka ek **Title (Naam)** type karke bhejein, jaise: `Science Quiz`", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, f"📝 *Sawal process ho gaye hain! (Total: {len(questions_list)})*\n\nAb is Quiz ka ek **Title (Naam)** type karke bhejein.", parse_mode="Markdown")
         bot.register_next_step_handler(msg, save_quiz_title)
 
     except Exception as e:
@@ -154,7 +154,6 @@ def save_quiz_title(message):
         bot.send_message(chat_id, "⚠️ Kuch galat hua. Kripya file dobara upload karein.")
         return
         
-    # Unique quiz ID create karenge text sharing ke liye
     quiz_id = f"q_{chat_id}"
     uploaded_quizzes[quiz_id] = {
         "title": quiz_title,
@@ -175,7 +174,8 @@ def save_quiz_title(message):
         parse_mode="Markdown"
     )
 
-@telebot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
+# FIX: Mode selection callback handling code updated
+@bot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
 def handle_modes(call):
     chat_id = call.message.chat.id
     if call.data == "mode_live_soon":
@@ -187,7 +187,10 @@ def handle_modes(call):
         bot.send_message(chat_id, "⚠️ Quiz data nahi mila.")
         return
         
-    bot.delete_message(chat_id, call.message.message_id)
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except:
+        pass
     show_quiz_card(chat_id, quiz_id)
 
 def show_quiz_card(chat_id, quiz_id):
@@ -196,7 +199,6 @@ def show_quiz_card(chat_id, quiz_id):
     total_q = len(quiz_data["questions"])
     bot_username = bot.get_me().username
     
-    # Official QuizBot jaisa format panel card
     card_text = (
         f"🎲 *Quiz '{title}'*\n\n"
         f"📝 *{total_q} questions*\n"
@@ -205,12 +207,10 @@ def show_quiz_card(chat_id, quiz_id):
     )
     
     markup = InlineKeyboardMarkup()
-    # 1. Start This Quiz Button (Personal chat me start karega)
     btn_start = InlineKeyboardButton("🏁 Start this quiz", callback_data=f"runquiz_{quiz_id}")
-    # 2. Start Quiz in Group Button
-    btn_group = InlineKeyboardButton("👥 Start quiz in group", switch_inline_query_chosen_chat=telebot.types.SwitchInlineQueryChosenChat(query=f"start_{quiz_id}", allow_user_chats=False, allow_bot_chats=False, allow_group_chats=True, allow_channel_chats=True))
-    # 3. Share Quiz Button
+    
     share_url = f"https://t.me/{bot_username}?start=startquiz_{quiz_id}"
+    btn_group = InlineKeyboardButton("👥 Start quiz in group", url=f"https://t.me/share/url?url={share_url}&text=Hey! Join this Quiz on Group:")
     btn_share = InlineKeyboardButton("🔗 Share quiz", url=f"https://t.me/share/url?url={share_url}&text=Hey! Try this awesome quiz: {title}")
     
     markup.add(btn_start)
@@ -223,7 +223,10 @@ def show_quiz_card(chat_id, quiz_id):
 def handle_run_quiz_click(call):
     chat_id = call.message.chat.id
     quiz_id = call.data.replace('runquiz_', '')
-    bot.delete_message(chat_id, call.message.message_id)
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except:
+        pass
     trigger_quiz_start(chat_id, quiz_id)
 
 def trigger_quiz_start(chat_id, quiz_id):
@@ -231,7 +234,7 @@ def trigger_quiz_start(chat_id, quiz_id):
         bot.send_message(chat_id, "⚠️ Quiz data nahi mila.")
         return
         
-    user_sessions[chat_id] = {"quiz_id": quiz_id, "current_q": 0, "score": 0}
+    user_sessions[chat_id] = {"quiz_id": quiz_id, "current_q": 0, "score": 0, "wrong": 0}
     quiz_title = uploaded_quizzes[quiz_id]["title"]
     
     bot.send_message(chat_id, "🚀 *Quiz shuru ho raha hai...*")
@@ -267,6 +270,7 @@ def send_question(chat_id):
         )
     except Exception as e:
         user_data["current_q"] += 1
+        user_data["wrong"] += 1
         user_sessions[chat_id] = user_data
         send_question(chat_id)
 
@@ -284,6 +288,8 @@ def handle_poll_answer(poll_answer):
         q_data = questions[q_index]
         if poll_answer.option_ids[0] == q_data["correct"]: 
             user_data["score"] += 1
+        else:
+            user_data["wrong"] += 1
             
     user_data["current_q"] += 1
     user_sessions[chat_id] = user_data
@@ -293,19 +299,30 @@ def handle_poll_answer(poll_answer):
 def show_result(chat_id):
     user_data = user_sessions.get(chat_id)
     if not user_data: return
+    
     score = user_data["score"]
     quiz_id = user_data["quiz_id"]
     title = uploaded_quizzes[quiz_id]["title"]
-    total = len(uploaded_quizzes[quiz_id]["questions"])
+    total = len(uploaded_quizzes[uploaded_quizzes]["questions"] if quiz_id in uploaded_quizzes else user_data.get("questions", [])) if not uploaded_quizzes.get(quiz_id) else len(uploaded_quizzes[quiz_id]["questions"])
     
-    bot.send_message(
-        chat_id, 
-        f"🏁 *Quiz Poora Hua!*\n📌 *Topic:* `{title}`\n📊 *Aapka Final Score:* {score}/{total}", 
-        parse_mode="Markdown"
+    correct = score
+    wrong = total - correct
+    accuracy = int((correct / total) * 100) if total > 0 else 0
+    
+    result_text = (
+        f"🏁 *Quiz Poora Hua!*\n\n"
+        f"📌 *Topic:* `{title}`\n"
+        f"📊 *Aapka Score Card:*\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ *Sahi (Correct):* `{correct}`\n"
+        f"❌ *Galat (Incorrect):* `{wrong}`\n"
+        f"🎯 *Accuracy (सटीकता):* `{accuracy}%`\n"
+        f"━━━━━━━━━━━━━━━━━━━"
     )
     
-    # Quiz khatam hone ke baad wapas Card generate kar dena taaki replay kiya ja sake
+    bot.send_message(chat_id, result_text, parse_mode="Markdown")
     time.sleep(1)
+    
     show_quiz_card(chat_id, quiz_id)
     if chat_id in user_sessions: del user_sessions[chat_id]
 
