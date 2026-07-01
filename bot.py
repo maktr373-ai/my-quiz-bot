@@ -34,35 +34,11 @@ def set_bot_commands():
     except Exception as e:
         print(f"Menu error: {e}")
 
-def parse_correct_option(val, options_count=4):
-    if val is None:
-        return 0
-    clean = str(val).strip().lower().replace('.', '').replace(')', '')
-    
-    abc_map = {'a': 0, 'b': 1, 'c': 2, 'd': 3, 'e': 4, 'f': 5}
-    if clean in abc_map:
-        return abc_map[clean]
-        
-    roman_map = {'i': 0, 'ii': 1, 'iii': 2, 'iv': 3, 'v': 4, 'vi': 5}
-    if clean in roman_map:
-        return roman_map[clean]
-        
-    try:
-        num = int(clean)
-        if 1 <= num <= options_count:
-            return num - 1
-        if 0 <= num < options_count:
-            return num
-    except ValueError:
-        pass
-        
-    return 0
-
 @bot.message_handler(commands=['start'])
 def start_message(message):
     welcome_text = (
-        "👋 *Welcome to the Ultra-Flexible Quiz Bot!*\n\n"
-        "Ab aap kisi bhi format ki CSV file upload kar sakte hain. Bot options aur sahi jawab ko khud samajh lega!\n\n"
+        "👋 *Welcome to the Smart Quiz Bot!*\n\n"
+        "Apni CSV file upload karke aap test generate kar sakte hain.\n\n"
         "⚙️ *Kaise use karein:*\n"
         "1. `/csv_to_quiz` par click karein.\n"
         "2. Apni `.csv` file bot ko bhejein.\n"
@@ -74,10 +50,7 @@ def start_message(message):
 def ask_for_csv(message):
     instructions = (
         "📁 *Apni CSV File send karein!*\n\n"
-        "Aapki CSV file ke top row (headers) mein yeh cheezein honi chahiye:\n"
-        "• *Sawal ke liye:* `question` ya `questions` ya `sawal`\n"
-        "• *Options ke liye:* `option1`, `option2`, `option3`, `option4`\n"
-        "• *Sahi Jawab ke liye:* `correct` ya `answer` ya `ans`"
+        "Kripya check karein ki aapki CSV file ke top row mein `question`, `option1`, `option2`, `option3`, `option4`, aur `correct` columns hon."
     )
     bot.send_message(message.chat.id, instructions, parse_mode="Markdown")
 
@@ -93,62 +66,44 @@ def handle_csv_upload(message):
         downloaded_file = bot.download_file(file_info.file_path)
         
         csv_text = downloaded_file.decode('utf-8-sig', errors='ignore')
-        csv_stream = io.StringIO(csv_text)
-        reader = csv.DictReader(csv_stream)
+        lines = [line.strip() for line in csv_text.split('\n') if line.strip()]
         
+        if not lines:
+            bot.send_message(chat_id, "❌ File khali hai.")
+            return
+            
         questions_list = []
-        for row in reader:
-            # Puraani spaces aur capital letters ka issue fix karne ke liye
-            clean_row = {str(k).strip().lower(): str(v).strip() for k, v in row.items() if k is not None}
-            
-            q_text = None
-            for key in ['question', 'questions', 'sawal', 'q']:
-                if key in clean_row:
-                    q_text = clean_row[key]
-                    break
-                    
-            if not q_text:
-                continue
+        start_idx = 1 if 'question' in lines[0].lower() else 0
+        
+        for line in lines[start_idx:]:
+            parts = list(csv.reader([line]))[0]
+            if len(parts) >= 6:
+                q_text = parts[0].strip()
+                opts = [p.strip() for p in parts[1:5] if p.strip()]
+                ans_str = parts[5].strip()
                 
-            options = []
-            # Option 1 se 6 tak check karega dynamic format mein
-            for i in range(1, 7):
-                opt_val = None
-                for key_variant in [f'option{i}', f'option_{i}', f'opt{i}', f'opt_{i}']:
-                    if key_variant in clean_row:
-                        opt_val = clean_row[key_variant]
+                if len(opts) < 2:
+                    continue
+                    
+                correct_idx = 0
+                for idx, o in enumerate(opts):
+                    if ans_str.lower() in o.lower() or o.lower() in ans_str.lower():
+                        correct_idx = idx
                         break
-                if opt_val:
-                    options.append(opt_val)
-            
-            if len(options) < 2:
-                continue
-                
-            correct_val = None
-            for key in ['correct', 'answer', 'ans', 'sahi']:
-                if key in clean_row:
-                    correct_val = clean_row[key]
-                    break
-                    
-            correct_index = parse_correct_option(correct_val, len(options))
-            
-            explanation = ""
-            for key in ['explanation', 'exp', 'vyakhya']:
-                if key in clean_row:
-                    explanation = clean_row[key]
-                    break
-            if not explanation:
-                explanation = "Sahi jawab!"
-            
-            questions_list.append({
-                "question": q_text,
-                "options": options,
-                "correct": correct_index,
-                "explanation": explanation
-            })
+                try:
+                    if ans_str.isdigit() and 1 <= int(ans_str) <= len(opts):
+                        correct_idx = int(ans_str) - 1
+                except:
+                    pass
+
+                questions_list.append({
+                    "question": q_text,
+                    "options": opts,
+                    "correct": correct_idx
+                })
         
         if not questions_list:
-            bot.send_message(chat_id, "❌ CSV file mein koi sahi data nahi mila. Kripya check karein ki columns ke naam (`question`, `option1`, `correct`) sahi hain ya nahi.")
+            bot.send_message(chat_id, "❌ CSV file read karne mein dikkat aayi. Kripya file check karein.")
             return
 
         uploaded_quizzes[chat_id] = questions_list
@@ -165,7 +120,7 @@ def start_uploaded_quiz(message):
         return
     
     user_sessions[chat_id] = {"current_q": 0, "score": 0, "answered": False}
-    bot.send_message(chat_id, "🎯 *Quiz shuru ho raha hai! Har sawal ke liye 15 seconds hain.*", parse_mode="Markdown")
+    bot.send_message(chat_id, "🎯 *Quiz shuru ho raha hai!*", parse_mode="Markdown")
     send_question(chat_id)
 
 def send_question(chat_id):
@@ -183,28 +138,18 @@ def send_question(chat_id):
     user_data["answered"] = False
     
     try:
+        # Explanation parameter ko poori tarah hata diya gaya hai
         bot.send_poll(
             chat_id=chat_id,
-            question=q_data["question"],
-            options=q_data["options"],
+            question=q_data["question"][:250], 
+            options=q_data["options"][:100],
             type='quiz',
             correct_option_id=q_data["correct"],
-            explanation=q_data["explanation"],
-            open_period=15,
+            open_period=20,
             is_anonymous=False
         )
         user_sessions[chat_id] = user_data
-        threading.Thread(target=start_timer_check, args=(chat_id, q_index)).start()
     except Exception as e:
-        user_data["current_q"] += 1
-        user_sessions[chat_id] = user_data
-        send_question(chat_id)
-
-def start_timer_check(chat_id, q_index):
-    time.sleep(16)
-    user_data = user_sessions.get(chat_id)
-    if user_data and user_data["current_q"] == q_index and not user_data["answered"]:
-        bot.send_message(chat_id, "⏰ *Time Out!* Aapne samay par jawab nahi diya.")
         user_data["current_q"] += 1
         user_sessions[chat_id] = user_data
         send_question(chat_id)
@@ -239,5 +184,4 @@ def show_result(chat_id):
 if __name__ == "__main__":
     set_bot_commands()
     threading.Thread(target=run_flask, daemon=True).start()
-    print("Super Flexible Quiz Bot is ready...")
     bot.infinity_polling()
