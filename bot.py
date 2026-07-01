@@ -7,15 +7,13 @@ import os
 from flask import Flask
 from telebot.types import BotCommand
 
-# Render Port issue fix karne ke liye web server
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Quiz Bot is running successfully!"
+    return "Quiz Bot is running perfectly!"
 
 def run_flask():
-    # Render dynamic port deta hai, agar na mile toh default 10000 use karega
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
@@ -64,7 +62,7 @@ def parse_correct_option(val, options_count=4):
 def start_message(message):
     welcome_text = (
         "👋 *Welcome to the Ultra-Flexible Quiz Bot!*\n\n"
-        "Ab aap kisi bhi format ki CSV file upload kar sakte hain. Bot options aur sahi jawab (A/a, 1, i) ko khud samajh lega!\n\n"
+        "Ab aap kisi bhi format ki CSV file upload kar sakte hain. Bot options aur sahi jawab ko khud samajh lega!\n\n"
         "⚙️ *Kaise use karein:*\n"
         "1. `/csv_to_quiz` par click karein.\n"
         "2. Apni `.csv` file bot ko bhejein.\n"
@@ -76,12 +74,10 @@ def start_message(message):
 def ask_for_csv(message):
     instructions = (
         "📁 *Apni CSV File send karein!*\n\n"
-        "Aapki CSV file mein yeh columns hone chahiye:\n"
-        "`question,option1,option2,option3,option4,correct`\n\n"
-        "🔥 *Flexibility:* `correct` column mein kuch bhi likhein:\n"
-        "• Letters: *A, B, C, D* ya *a, b, c, d*\n"
-        "• Numbers: *1, 2, 3, 4*\n"
-        "• Roman: *I, II, III, IV*"
+        "Aapki CSV file ke top row (headers) mein yeh cheezein honi chahiye:\n"
+        "• *Sawal ke liye:* `question` ya `questions` ya `sawal`\n"
+        "• *Options ke liye:* `option1`, `option2`, `option3`, `option4`\n"
+        "• *Sahi Jawab ke liye:* `correct` ya `answer` ya `ans`"
     )
     bot.send_message(message.chat.id, instructions, parse_mode="Markdown")
 
@@ -102,35 +98,57 @@ def handle_csv_upload(message):
         
         questions_list = []
         for row in reader:
-            clean_row = {str(k).strip().lower(): v for k, v in row.items() if k}
+            # Puraani spaces aur capital letters ka issue fix karne ke liye
+            clean_row = {str(k).strip().lower(): str(v).strip() for k, v in row.items() if k is not None}
             
-            q_text = clean_row.get('question') or clean_row.get('questions') or clean_row.get('sawal')
+            q_text = None
+            for key in ['question', 'questions', 'sawal', 'q']:
+                if key in clean_row:
+                    q_text = clean_row[key]
+                    break
+                    
             if not q_text:
                 continue
                 
             options = []
+            # Option 1 se 6 tak check karega dynamic format mein
             for i in range(1, 7):
-                opt = clean_row.get(f'option{i}') or clean_row.get(f'option_{i}') or clean_row.get(f'opt{i}')
-                if opt and str(opt).strip():
-                    options.append(str(opt).strip())
+                opt_val = None
+                for key_variant in [f'option{i}', f'option_{i}', f'opt{i}', f'opt_{i}']:
+                    if key_variant in clean_row:
+                        opt_val = clean_row[key_variant]
+                        break
+                if opt_val:
+                    options.append(opt_val)
             
             if len(options) < 2:
                 continue
                 
-            correct_val = clean_row.get('correct') or clean_row.get('answer') or clean_row.get('ans')
+            correct_val = None
+            for key in ['correct', 'answer', 'ans', 'sahi']:
+                if key in clean_row:
+                    correct_val = clean_row[key]
+                    break
+                    
             correct_index = parse_correct_option(correct_val, len(options))
             
-            explanation = clean_row.get('explanation') or clean_row.get('exp') or "Sahi jawab!"
+            explanation = ""
+            for key in ['explanation', 'exp', 'vyakhya']:
+                if key in clean_row:
+                    explanation = clean_row[key]
+                    break
+            if not explanation:
+                explanation = "Sahi jawab!"
             
             questions_list.append({
-                "question": str(q_text).strip(),
+                "question": q_text,
                 "options": options,
                 "correct": correct_index,
-                "explanation": str(explanation).strip()
+                "explanation": explanation
             })
         
         if not questions_list:
-            bot.send_message(chat_id, "❌ CSV file mein koi sahi data nahi mila.")
+            bot.send_message(chat_id, "❌ CSV file mein koi sahi data nahi mila. Kripya check karein ki columns ke naam (`question`, `option1`, `correct`) sahi hain ya nahi.")
             return
 
         uploaded_quizzes[chat_id] = questions_list
@@ -165,7 +183,7 @@ def send_question(chat_id):
     user_data["answered"] = False
     
     try:
-        poll = bot.send_poll(
+        bot.send_poll(
             chat_id=chat_id,
             question=q_data["question"],
             options=q_data["options"],
@@ -220,7 +238,6 @@ def show_result(chat_id):
 
 if __name__ == "__main__":
     set_bot_commands()
-    # Background thread mein Flask ko run karna taaki Render port active rahe
     threading.Thread(target=run_flask, daemon=True).start()
-    print("Flexible Quiz Bot with Port Fixer is ready...")
+    print("Super Flexible Quiz Bot is ready...")
     bot.infinity_polling()
