@@ -5,7 +5,7 @@ import threading
 import time
 import os
 from flask import Flask
-from telebot.types import BotCommand
+from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 
 app = Flask('')
 
@@ -20,6 +20,7 @@ def run_flask():
 BOT_TOKEN = "8943398504:AAGIjt1WrTe5wivSDU9tqtWSO97DM9FN2iQ" 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# In-memory storage (Note: Render restart par yeh reset ho sakta hai)
 uploaded_quizzes = {}
 user_sessions = {}
 temp_csv_data = {}
@@ -29,7 +30,7 @@ def set_bot_commands():
         commands = [
             BotCommand("start", "🤖 Bot ko shuru karein"),
             BotCommand("csv_to_quiz", "📁 CSV file se quiz banayein"),
-            BotCommand("quiz", "🎯 Upload kiya hua Quiz shuru karein")
+            BotCommand("quiz", "🎯 Apna banaya hua Quiz chalayein")
         ]
         bot.set_my_commands(commands)
     except Exception as e:
@@ -37,14 +38,25 @@ def set_bot_commands():
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
+    # Agar user share button se ya direct quiz shuru karne aaya hai
+    text_args = message.text.split()
+    if len(parts := text_args) > 1 and parts[1].startswith('startquiz_'):
+        quiz_id = parts[1].replace('startquiz_', '')
+        if quiz_id in uploaded_quizzes:
+            trigger_quiz_start(message.chat.id, quiz_id)
+            return
+        else:
+            bot.send_message(message.chat.id, "⚠️ Yeh quiz abhi available nahi hai ya expire ho chuka hai.")
+            return
+
     welcome_text = (
         "👋 *Welcome to the Smart Quiz Bot!*\n\n"
-        "Apni CSV file upload karke aap test generate kar sakte hain.\n\n"
+        "Apni CSV file upload karke aap professional standard quiz bana sakte hain.\n\n"
         "⚙️ *Kaise use karein:*\n"
         "1. `/csv_to_quiz` par click karein.\n"
         "2. Apni `.csv` file bot ko bhejein.\n"
         "3. Quiz ka ek Title (Naam) type karke bhejein.\n"
-        "4. `/quiz` daba kar test shuru karein!"
+        "4. Standard Mode choose karke apna Shareable Quiz Card taiyar karein!"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
 
@@ -142,37 +154,90 @@ def save_quiz_title(message):
         bot.send_message(chat_id, "⚠️ Kuch galat hua. Kripya file dobara upload karein.")
         return
         
-    uploaded_quizzes[chat_id] = {
+    # Unique quiz ID create karenge text sharing ke liye
+    quiz_id = f"q_{chat_id}"
+    uploaded_quizzes[quiz_id] = {
         "title": quiz_title,
-        "questions": temp_csv_data[chat_id]
+        "questions": temp_csv_data[chat_id],
+        "creator": chat_id
     }
     del temp_csv_data[chat_id]
     
+    # Mode puchne ke liye buttons
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("⚙️ Standard Mode", callback_data=f"mode_standard_{quiz_id}"))
+    markup.add(InlineKeyboardButton("🔒 Live Mode (Coming Soon)", callback_data="mode_live_soon"))
+    
     bot.send_message(
         chat_id, 
-        f"✅ *Zabardast!* Quiz ka naam *\"{quiz_title}\"* set ho gaya hai.\n\nAb test shuru karne ke liye `/quiz` type karein!", 
+        f"✅ *Quiz Ka Naam Saved:* \"{quiz_title}\"\n\nAb select karein ki aap ise kis mode mein chalana chahte hain:", 
+        reply_markup=markup,
         parse_mode="Markdown"
     )
 
-@bot.message_handler(commands=['quiz'])
-def start_uploaded_quiz(message):
-    chat_id = message.chat.id
-    if chat_id not in uploaded_quizzes or not uploaded_quizzes[chat_id]["questions"]:
-        bot.send_message(chat_id, "⚠️ Pehle ek CSV file bhejiye! `/csv_to_quiz` daba kar tareeka dekhein.")
+@telebot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
+def handle_modes(call):
+    chat_id = call.message.chat.id
+    if call.data == "mode_live_soon":
+        bot.answer_callback_query(call.id, "Live mode abhi under development hai! Kripya Standard Mode chunein.", show_alert=True)
         return
+        
+    quiz_id = call.data.replace('mode_standard_', '')
+    if quiz_id not in uploaded_quizzes:
+        bot.send_message(chat_id, "⚠️ Quiz data nahi mila.")
+        return
+        
+    bot.delete_message(chat_id, call.message.message_id)
+    show_quiz_card(chat_id, quiz_id)
+
+def show_quiz_card(chat_id, quiz_id):
+    quiz_data = uploaded_quizzes[quiz_id]
+    title = quiz_data["title"]
+    total_q = len(quiz_data["questions"])
+    bot_username = bot.get_me().username
     
-    user_sessions[chat_id] = {"current_q": 0, "score": 0, "answered": False}
-    quiz_title = uploaded_quizzes[chat_id]["title"]
+    # Official QuizBot jaisa format panel card
+    card_text = (
+        f"🎲 *Quiz '{title}'*\n\n"
+        f"📝 *{total_q} questions*\n"
+        f"⏱ *30 sec* per question\n\n"
+        f"👥 Tap on buttons below to play!"
+    )
     
-    # 1. Sabse pehle message: Quiz shuru ho raha hai
-    bot.send_message(chat_id, "🚀 *Quiz shuru ho raha hai...*", parse_mode="Markdown")
-    time.sleep(1.5) # Thoda sa gap taaki ek ke baad ek aaye
+    markup = InlineKeyboardMarkup()
+    # 1. Start This Quiz Button (Personal chat me start karega)
+    btn_start = InlineKeyboardButton("🏁 Start this quiz", callback_data=f"runquiz_{quiz_id}")
+    # 2. Start Quiz in Group Button
+    btn_group = InlineKeyboardButton("👥 Start quiz in group", switch_inline_query_chosen_chat=telebot.types.SwitchInlineQueryChosenChat(query=f"start_{quiz_id}", allow_user_chats=False, allow_bot_chats=False, allow_group_chats=True, allow_channel_chats=True))
+    # 3. Share Quiz Button
+    share_url = f"https://t.me/{bot_username}?start=startquiz_{quiz_id}"
+    btn_share = InlineKeyboardButton("🔗 Share quiz", url=f"https://t.me/share/url?url={share_url}&text=Hey! Try this awesome quiz: {title}")
     
-    # 2. Uske baad naya message: Sirf Title
+    markup.add(btn_start)
+    markup.add(btn_group)
+    markup.add(btn_share)
+    
+    bot.send_message(chat_id, card_text, reply_markup=markup, parse_mode="Markdown")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('runquiz_'))
+def handle_run_quiz_click(call):
+    chat_id = call.message.chat.id
+    quiz_id = call.data.replace('runquiz_', '')
+    bot.delete_message(chat_id, call.message.message_id)
+    trigger_quiz_start(chat_id, quiz_id)
+
+def trigger_quiz_start(chat_id, quiz_id):
+    if quiz_id not in uploaded_quizzes:
+        bot.send_message(chat_id, "⚠️ Quiz data nahi mila.")
+        return
+        
+    user_sessions[chat_id] = {"quiz_id": quiz_id, "current_q": 0, "score": 0}
+    quiz_title = uploaded_quizzes[quiz_id]["title"]
+    
+    bot.send_message(chat_id, "🚀 *Quiz shuru ho raha hai...*")
+    time.sleep(1.5)
     bot.send_message(chat_id, f"📋 *Topic:* `{quiz_title}`\n\nAll the best! 👍", parse_mode="Markdown")
-    time.sleep(2) # Students ko title dekhne ka time milega
-    
-    # 3. Phir automatic quiz start ho jayega
+    time.sleep(2)
     send_question(chat_id)
 
 def send_question(chat_id):
@@ -180,16 +245,14 @@ def send_question(chat_id):
     if not user_data: return
     
     q_index = user_data["current_q"]
-    quiz_data = uploaded_quizzes[chat_id]
-    questions = quiz_data["questions"]
+    quiz_id = user_data["quiz_id"]
+    questions = uploaded_quizzes[quiz_id]["questions"]
     
     if q_index >= len(questions):
         show_result(chat_id)
         return
         
     q_data = questions[q_index]
-    user_data["answered"] = False
-    
     question_text = f"❓ {q_data['question']}"
     
     try:
@@ -202,7 +265,6 @@ def send_question(chat_id):
             open_period=30, 
             is_anonymous=False
         )
-        user_sessions[chat_id] = user_data
     except Exception as e:
         user_data["current_q"] += 1
         user_sessions[chat_id] = user_data
@@ -212,11 +274,11 @@ def send_question(chat_id):
 def handle_poll_answer(poll_answer):
     chat_id = poll_answer.user.id
     user_data = user_sessions.get(chat_id)
-    if not user_data or chat_id not in uploaded_quizzes: return
+    if not user_data: return
     
-    user_data["answered"] = True
     q_index = user_data["current_q"]
-    questions = uploaded_quizzes[chat_id]["questions"]
+    quiz_id = user_data["quiz_id"]
+    questions = uploaded_quizzes[quiz_id]["questions"]
     
     if q_index < len(questions):
         q_data = questions[q_index]
@@ -232,16 +294,29 @@ def show_result(chat_id):
     user_data = user_sessions.get(chat_id)
     if not user_data: return
     score = user_data["score"]
-    questions = uploaded_quizzes[chat_id]["questions"]
-    title = uploaded_quizzes[chat_id]["title"]
-    total = len(questions)
+    quiz_id = user_data["quiz_id"]
+    title = uploaded_quizzes[quiz_id]["title"]
+    total = len(uploaded_quizzes[quiz_id]["questions"])
     
     bot.send_message(
         chat_id, 
         f"🏁 *Quiz Poora Hua!*\n📌 *Topic:* `{title}`\n📊 *Aapka Final Score:* {score}/{total}", 
         parse_mode="Markdown"
     )
+    
+    # Quiz khatam hone ke baad wapas Card generate kar dena taaki replay kiya ja sake
+    time.sleep(1)
+    show_quiz_card(chat_id, quiz_id)
     if chat_id in user_sessions: del user_sessions[chat_id]
+
+@bot.message_handler(commands=['quiz'])
+def menu_quiz_call(message):
+    chat_id = message.chat.id
+    quiz_id = f"q_{chat_id}"
+    if quiz_id in uploaded_quizzes:
+        show_quiz_card(chat_id, quiz_id)
+    else:
+        bot.send_message(chat_id, "⚠️ Mujhe koi active quiz nahi mila. Pehle ek file bhejiye! `/csv_to_quiz`")
 
 if __name__ == "__main__":
     set_bot_commands()
