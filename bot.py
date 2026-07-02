@@ -1,15 +1,16 @@
 import os
 import csv
 import random
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 
-# Environment variables load karein (.env file ya Render se)
+# Environment variables load karein
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Python function: CSV file se questions read karne ke liye
+# CSV file se questions read karne ka function
 def load_questions_from_csv():
     questions_list = []
     file_path = "questions.csv"
@@ -33,9 +34,8 @@ def load_questions_from_csv():
         
     return questions_list
 
-# /start command - Menu Buttons aur Welcome Message
+# /start command
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Yeh aapke bot ke niche Menu Buttons bana dega
     keyboard = [["📝 Start Quiz"], ["ℹ️ Help & Info"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     
@@ -46,7 +46,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=reply_markup)
 
-# Python function: Buttons ke clicks ko handle karne ke liye
+# Menu Handle karne ka function
 async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
@@ -54,13 +54,11 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         questions = load_questions_from_csv()
         
         if not questions:
-            await update.message.reply_text("⚠️ Sorry! Abhi database me koi sawal nahi mila. Kripya questions.csv file check karein.")
+            await update.message.reply_text("⚠️ Sorry! Abhi database me koi sawal nahi mila.")
             return
 
-        # Randomly ek sawal chunein
         quiz_item = random.choice(questions)
         
-        # Telegram native Quiz poll send karne ka Python command
         await context.bot.send_poll(
             chat_id=update.effective_chat.id,
             question=quiz_item["question"],
@@ -68,7 +66,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             type="quiz",
             correct_option_id=quiz_item["correct"],
             explanation=quiz_item["explanation"],
-            open_period=30  # 30 Seconds ka timer
+            open_period=30
         )
         
     elif user_text == "ℹ️ Help & Info":
@@ -81,17 +79,28 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Kripya niche diye gaye Menu buttons me se hi kisi ek ko chunein.")
 
-if __name__ == "__main__":
+# Main function jisme naya loop handler lagaya hai Python 3.14 ke liye
+def main():
     if not TOKEN:
         print("Error: TELEGRAM_BOT_TOKEN nahi mila!")
-        exit(1)
+        return
         
     print("CSV Quiz Bot start ho raha hai...")
     app = Application.builder().token(TOKEN).build()
 
-    # Handlers register karein
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu))
 
     print("Bot live hai!")
-    app.run_polling()
+    
+    # Python 3.14 and library v21 compatibility fix
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+    app.run_polling(close_loop=False)
+
+if __name__ == "__main__":
+    main()
