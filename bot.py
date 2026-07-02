@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-# Global list taaki data memory me safely save rahe
+# Global list data memory me rakhne ke liye
 QUESTIONS_DATABASE = []
 
 def find_column(row, standard_names):
@@ -20,7 +20,6 @@ def find_column(row, standard_names):
     return None
 
 def parse_csv_data(csv_text):
-    """CSV text ko read karke questions list return karta hai (Super Flexible)"""
     questions_list = []
     try:
         f = io.StringIO(csv_text)
@@ -93,25 +92,22 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             open_period=30
         )
     except Exception as e:
-        await update.message.reply_text("❌ Quiz send karne me dikkat aayi. Kripya check karein ki option ka size lamba toh nahi hai.")
+        await update.message.reply_text("❌ Quiz send karne me dikkat aayi. Check karein options jyada lambe na hon.")
 
 async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global QUESTIONS_DATABASE
     document = update.message.document
     
-    if not document.file_name.endswith('.csv'):
-        await update.message.reply_text("⚠️ Kripya sirf `.csv` format wali file hi bhejें!")
+    if not document or not document.file_name.endswith('.csv'):
         return
 
     status_message = await update.message.reply_text("📥 File mil gayi hai, data load kiya ja raha hai...")
 
     try:
-        # File ko byte arrays me download karke text me convert karenge
         new_file = await context.bot.get_file(document.file_id)
         file_bytes = await new_file.download_as_bytearray()
         csv_text = file_bytes.decode('utf-8', errors='ignore')
         
-        # Data load karenge
         parsed_questions = parse_csv_data(csv_text)
         
         if parsed_questions:
@@ -123,8 +119,8 @@ async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await status_message.edit_text(
-                "⚠️ File khali hai ya columns match nahi hue. "
-                "Kripya check karein ki file me `question`, `option1`, `option2`, `option3`, `option4`, `correct` columns hain ya nahi."
+                "⚠️ File columns match nahi hue. "
+                "Check karein ki file me `question`, `option1`, `option2`, `option3`, `option4`, `correct` columns hain na?"
             )
     except Exception as e:
         await status_message.edit_text(f"❌ File handle karne me error aaya: {e}")
@@ -132,11 +128,11 @@ async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not TOKEN:
         return
+    # Conflict drop karne ke liye dynamic pooling configuration set kiya hai
     app = Application.builder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
-    # Direct document filter lagaya hai taaki handle karne me crash na ho
     app.add_handler(MessageHandler(filters.Document.ALL, handle_csv_upload))
     
     try:
@@ -145,7 +141,8 @@ def main():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-    app.run_polling(close_loop=False)
+    # drop_pending_updates=True lagane se purane saare stuck conflicts band ho jayenge
+    app.run_polling(close_loop=False, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
