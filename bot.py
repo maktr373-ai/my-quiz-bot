@@ -1,5 +1,6 @@
 import os
 import csv
+import io
 import random
 import asyncio
 from telegram import Update, ReplyKeyboardRemove
@@ -9,128 +10,124 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_FILE_PATH = os.path.join(BASE_DIR, "questions.csv")
+# Global list taaki data memory me safely save rahe
+QUESTIONS_DATABASE = []
 
 def find_column(row, standard_names):
-    """Yeh function kisi bhi tarah ke column name ko dhoond nikalega"""
     for key in row.keys():
         if key and key.strip().lower() in standard_names:
             return key
     return None
 
-def load_questions_from_csv():
+def parse_csv_data(csv_text):
+    """CSV text ko read karke questions list return karta hai (Super Flexible)"""
     questions_list = []
-    if not os.path.exists(CSV_FILE_PATH):
-        return questions_list
     try:
-        # 'utf-8-sig' Excel ke BOM characters ko automatically clean kar deta hai
-        with open(CSV_FILE_PATH, mode='r', encoding='utf-8-sig', errors='ignore') as file:
-            csv_reader = csv.DictReader(file)
+        f = io.StringIO(csv_text)
+        csv_reader = csv.DictReader(f)
+        
+        first_row = next(csv_reader, None)
+        if first_row is None:
+            return questions_list
             
-            # Pehli row check karke columns mapping karenge
-            first_row = next(csv_reader, None)
-            if first_row is None:
-                return questions_list
-                
-            # Column names ko pehchanna (Flexible Mapping)
-            q_col = find_column(first_row, ["question", "questions", "sawal", "q"])
-            o1_col = find_column(first_row, ["option1", "option 1", "opt1", "a"])
-            o2_col = find_column(first_row, ["option2", "option 2", "opt2", "b"])
-            o3_col = find_column(first_row, ["option3", "option 3", "opt3", "c"])
-            o4_col = find_column(first_row, ["option4", "option 4", "opt4", "d"])
-            c_col = find_column(first_row, ["correct", "correct_option", "answer", "ans", "right"])
+        q_col = find_column(first_row, ["question", "questions", "sawal", "q"])
+        o1_col = find_column(first_row, ["option1", "option 1", "opt1", "a"])
+        o2_col = find_column(first_row, ["option2", "option 2", "opt2", "b"])
+        o3_col = find_column(first_row, ["option3", "option 3", "opt3", "c"])
+        o4_col = find_column(first_row, ["option4", "option 4", "opt4", "d"])
+        c_col = find_column(first_row, ["correct", "correct_option", "answer", "ans", "right"])
 
-            # Pehli row ka data process karenge agar columns sahi mile
-            if q_col and o1_col and o2_col and o3_col and o4_col and c_col:
-                def extract_data(row_data):
-                    try:
-                        # Correct option number ko extract karna (e.g. "3" ya "3 " ko integer me badalna)
-                        correct_val = "".join(filter(str.isdigit, str(row_data[c_col])))
-                        correct_idx = int(correct_val)
-                        
-                        # Agar index 1 se 4 ke beech hai toh use 0-3 base me convert karna
-                        if correct_idx >= 1:
-                            correct_idx = correct_idx - 1
-                            
-                        return {
-                            "question": row_data[q_col].strip(),
-                            "options": [
-                                row_data[o1_col].strip(),
-                                row_data[o2_col].strip(),
-                                row_data[o3_col].strip(),
-                                row_data[o4_col].strip()
-                            ],
-                            "correct": correct_idx
-                        }
-                    except:
-                        return None
+        def extract_data(row_data):
+            try:
+                if not row_data[q_col]: return None
+                correct_val = "".join(filter(str.isdigit, str(row_data[c_col])))
+                correct_idx = int(correct_val)
+                if correct_idx >= 1:
+                    correct_idx = correct_idx - 1
+                return {
+                    "question": row_data[q_col].strip(),
+                    "options": [
+                        row_data[o1_col].strip(),
+                        row_data[o2_col].strip(),
+                        row_data[o3_col].strip(),
+                        row_data[o4_col].strip()
+                    ],
+                    "correct": correct_idx
+                }
+            except:
+                return None
 
-                p1 = extract_data(first_row)
-                if p1: questions_list.append(p1)
-
-                # Baki saari rows ko read karenge
-                for row in csv_reader:
-                    p = extract_data(row)
-                    if p: questions_list.append(p)
-                    
+        if q_col and o1_col and o2_col and o3_col and o4_col and c_col:
+            p1 = extract_data(first_row)
+            if p1: questions_list.append(p1)
+            for row in csv_reader:
+                p = extract_data(row)
+                if p: questions_list.append(p)
     except Exception as e:
-        print(f"Error reading CSV: {e}")
+        print(f"Error parsing CSV: {e}")
     return questions_list
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         "👋 **Namaste! 'The Academic' Quiz Bot me aapka swagat hai.**\n\n"
-        "📊 **CSV File Upload karein:** Aap apni kisi bhi tarah ki `.csv` file directly chat me bhej sakte hain. Bot use turant padh lega!\n\n"
-        "🧩 **Quiz Kheliye:** Niche left side wale **Blue Menu Button** par click karke `📝 Start Quiz` par click karein."
+        "📊 **CSV File Kaise Upload Karein:**\n"
+        "Aap apni naye sawalon wali `.csv` file directly is chat me bhej dijiye. Bot use turant set kar lega.\n\n"
+        "🧩 **Quiz Shuru Karein:** Niche left side wale **Blue Menu Button** par click karke `📝 Start Quiz` choose karein."
     )
     await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
 
 async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    questions = load_questions_from_csv()
-    if not questions:
-        await update.message.reply_text("⚠️ Database khali hai! Kripya pehle apni ek `.csv` file is chat me bhejें.")
+    global QUESTIONS_DATABASE
+    if not QUESTIONS_DATABASE:
+        await update.message.reply_text("⚠️ Abhi database khali hai! Kripya pehle apni ek `.csv` file mujhe bhejें.")
         return
     
-    quiz_item = random.choice(questions)
-    # Explanation parameter poori tarah se hata diya gaya hai
-    await context.bot.send_poll(
-        chat_id=update.effective_chat.id,
-        question=quiz_item["question"],
-        options=quiz_item["options"],
-        type="quiz",
-        correct_option_id=quiz_item["correct"],
-        open_period=30
-    )
+    quiz_item = random.choice(QUESTIONS_DATABASE)
+    try:
+        await context.bot.send_poll(
+            chat_id=update.effective_chat.id,
+            question=quiz_item["question"],
+            options=quiz_item["options"],
+            type="quiz",
+            correct_option_id=quiz_item["correct"],
+            open_period=30
+        )
+    except Exception as e:
+        await update.message.reply_text("❌ Quiz send karne me dikkat aayi. Kripya check karein ki option ka size lamba toh nahi hai.")
 
 async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global QUESTIONS_DATABASE
     document = update.message.document
+    
     if not document.file_name.endswith('.csv'):
-        await update.message.reply_text("⚠️ Kripya sirf `.csv` file hi upload karein!")
+        await update.message.reply_text("⚠️ Kripya sirf `.csv` format wali file hi bhejें!")
         return
 
-    status_message = await update.message.reply_text("📥 File processing chalu hai, thoda intezar karein...")
+    status_message = await update.message.reply_text("📥 File mil gayi hai, data load kiya ja raha hai...")
 
     try:
+        # File ko byte arrays me download karke text me convert karenge
         new_file = await context.bot.get_file(document.file_id)
-        await new_file.download_to_drive(CSV_FILE_PATH)
+        file_bytes = await new_file.download_as_bytearray()
+        csv_text = file_bytes.decode('utf-8', errors='ignore')
         
-        # Nayi flexible verification
-        test_questions = load_questions_from_csv()
-        if test_questions:
+        # Data load karenge
+        parsed_questions = parse_csv_data(csv_text)
+        
+        if parsed_questions:
+            QUESTIONS_DATABASE = parsed_questions
             await status_message.edit_text(
                 f"✅ **Success! Aapki CSV file update ho gayi hai.**\n"
-                f"📊 Total **{len(test_questions)}** sawal mil gaye hain!\n\n"
-                f"Ab aap bina kisi dikkat ke Blue Menu se quiz shuru kar sakte hain."
+                f"📊 Total **{len(QUESTIONS_DATABASE)}** sawal load ho chuke hain!\n\n"
+                f"Ab aap Blue Menu se `📝 Start Quiz` par click karke test kar sakte hain."
             )
         else:
             await status_message.edit_text(
-                "❌ Bot ko file me columns sahi se nahi mile.\n"
-                "Kripya check karein ki file me columns ke naam milte-julte hon, jaise: `question`, `option1`, `option2`, `option3`, `option4`, aur `correct`."
+                "⚠️ File khali hai ya columns match nahi hue. "
+                "Kripya check karein ki file me `question`, `option1`, `option2`, `option3`, `option4`, `correct` columns hain ya nahi."
             )
-            
     except Exception as e:
-        await status_message.edit_text(f"❌ File save karne me error aaya: {e}")
+        await status_message.edit_text(f"❌ File handle karne me error aaya: {e}")
 
 def main():
     if not TOKEN:
@@ -139,7 +136,8 @@ def main():
     
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
-    app.add_handler(MessageHandler(filters.Document.FileExtension("csv"), handle_csv_upload))
+    # Direct document filter lagaya hai taaki handle karne me crash na ho
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_csv_upload))
     
     try:
         loop = asyncio.get_event_loop()
