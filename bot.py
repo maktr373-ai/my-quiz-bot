@@ -24,7 +24,6 @@ def parse_csv_data(csv_text):
     try:
         f = io.StringIO(csv_text)
         csv_reader = csv.DictReader(f)
-        
         first_row = next(csv_reader, None)
         if first_row is None:
             return questions_list
@@ -92,45 +91,38 @@ async def quiz_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             open_period=30
         )
     except Exception as e:
-        await update.message.reply_text("❌ Quiz send karne me dikkat aayi. Check karein options jyada lambe na hon.")
+        await update.message.reply_text("❌ Quiz send karne me dikkat aayi. Check karein options bade toh nahi hain.")
 
 async def handle_csv_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global QUESTIONS_DATABASE
     document = update.message.document
-    
     if not document or not document.file_name.endswith('.csv'):
         return
 
     status_message = await update.message.reply_text("📥 File mil gayi hai, data load kiya ja raha hai...")
-
     try:
-        new_file = await context.bot.get_file(document.file_id)
+        # CRITICAL FIX: read_timeout badha kar 60 seconds kar diya hai taaki network slow hone par Timeout na aaye
+        new_file = await context.bot.get_file(document.file_id, read_timeout=60)
         file_bytes = await new_file.download_as_bytearray()
         csv_text = file_bytes.decode('utf-8', errors='ignore')
         
         parsed_questions = parse_csv_data(csv_text)
-        
         if parsed_questions:
             QUESTIONS_DATABASE = parsed_questions
             await status_message.edit_text(
-                f"✅ **Success! Aapki CSV file update ho gayi hai.**\n"
-                f"📊 Total **{len(QUESTIONS_DATABASE)}** sawal load ho chuke hain!\n\n"
-                f"Ab aap Blue Menu se `📝 Start Quiz` par click karke test kar sakte hain."
+                f"✅ **Success! Nayi CSV file update ho gayi hai.**\n"
+                f"📊 Total **{len(QUESTIONS_DATABASE)}** sawal bina kisi error ke mil chuke hain!"
             )
         else:
-            await status_message.edit_text(
-                "⚠️ File columns match nahi hue. "
-                "Check karein ki file me `question`, `option1`, `option2`, `option3`, `option4`, `correct` columns hain na?"
-            )
+            await status_message.edit_text("⚠️ Columns match nahi ho paye. File me question, option1..4 aur correct hona chahiye.")
     except Exception as e:
         await status_message.edit_text(f"❌ File handle karne me error aaya: {e}")
 
 def main():
     if not TOKEN:
         return
-    # Conflict drop karne ke liye dynamic pooling configuration set kiya hai
-    app = Application.builder().token(TOKEN).build()
-    
+    # Application level par bhi read/write timeouts badha diye hain safe side ke liye
+    app = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).build()
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("quiz", quiz_command))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_csv_upload))
@@ -141,7 +133,6 @@ def main():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-    # drop_pending_updates=True lagane se purane saare stuck conflicts band ho jayenge
     app.run_polling(close_loop=False, drop_pending_updates=True)
 
 if __name__ == "__main__":
