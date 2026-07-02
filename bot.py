@@ -9,7 +9,7 @@ from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 
-# --- 1. Flask Web Server Setup (Bot ko jagaye rakhne ke liye) ---
+# --- 1. Flask Web Server Setup ---
 app = Flask('')
 
 @app.route('/')
@@ -20,7 +20,7 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- 2. Safe Token Configuration (Render Variable se chalega) ---
+# --- 2. Safe Token Configuration ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN") 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -67,7 +67,7 @@ def start_message(message):
         "⚙️ *Kaise use karein:*\n"
         "1. `/csv_to_quiz` par click karein.\n"
         "2. Apni `.csv` file bot ko bhejein.\n"
-        "3. Quiz ka ek Title (Naam) type karke bhejein."
+        "3. Apni Category chunein aur Quiz ka ek Title type karke bhejein."
     )
     bot.send_message(chat_id, welcome_text, parse_mode="Markdown")
 
@@ -149,25 +149,69 @@ def handle_csv_upload(message):
             bot.send_message(chat_id, "❌ CSV file read karne mein dikkat aayi.")
             return
 
-        temp_csv_data[chat_id] = questions_list
-        msg = bot.send_message(chat_id, f"📝 *Sawal process ho gaye hain! (Total: {len(questions_list)})*\n\nAb is Quiz ka ek **Title (Naam)** type karke bhejein.", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, save_quiz_title)
+        # Data ko temporarily save kar rahe hain aur pehle category puch rahe hain
+        temp_csv_data[chat_id] = {"questions": questions_list}
+        
+        # --- NEW: Category Selection Buttons ---
+        markup = InlineKeyboardMarkup(row_width=2)
+        categories = [
+            ("History", "cat_history"), ("Geography", "cat_geography"),
+            ("Polity", "cat_polity"), ("Economics", "cat_economics"),
+            ("Physics", "cat_physics"), ("Chemistry", "cat_chemistry"),
+            ("Biology", "cat_biology"), ("Maths", "cat_maths"),
+            ("English", "cat_english"), ("Hindi", "cat_hindi")
+        ]
+        buttons = [InlineKeyboardButton(text, callback_data=cb) for text, cb in categories]
+        markup.add(*buttons)
+        
+        bot.send_message(
+            chat_id, 
+            f"📝 *Sawal process ho gaye hain! (Total: {len(questions_list)})*\n\nAb niche diye gaye options mein se is Quiz ki **Category** chunein:", 
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
 
     except Exception as e:
         bot.send_message(chat_id, f"❌ File process karne mein error aaya: {str(e)}")
+
+# --- NEW: Handling Category Selection & Asking for Title ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cat_'))
+def handle_category_selection(call):
+    chat_id = call.message.chat.id
+    category_selected = call.data.replace('cat_', '').capitalize()
+    
+    if chat_id not in temp_csv_data:
+        bot.answer_callback_query(call.id, "⚠️ Session expire ho gaya, file fir se bhein.", show_alert=True)
+        return
+        
+    try:
+        bot.delete_message(chat_id, call.message.message_id)
+    except:
+        pass
+        
+    # Category ko save kiya aur title manga
+    temp_csv_data[chat_id]["category"] = category_selected
+    
+    msg = bot.send_message(
+        chat_id, 
+        f"📁 *Category Selected:* `{category_selected}`\n\nAb is Quiz ka ek **Title (Naam)** type karke bhejein:",
+        parse_mode="Markdown"
+    )
+    bot.register_next_step_handler(msg, save_quiz_title)
 
 def save_quiz_title(message):
     chat_id = message.chat.id
     quiz_title = message.text.strip()
     
-    if chat_id not in temp_csv_data:
+    if chat_id not in temp_csv_data or "category" not in temp_csv_data[chat_id]:
         bot.send_message(chat_id, "⚠️ Kuch galat hua. Kripya file dobara upload karein.")
         return
         
     quiz_id = f"q_{chat_id}"
     uploaded_quizzes[quiz_id] = {
         "title": quiz_title,
-        "questions": temp_csv_data[chat_id],
+        "category": temp_csv_data[chat_id]["category"],
+        "questions": temp_csv_data[chat_id]["questions"],
         "creator": chat_id
     }
     del temp_csv_data[chat_id]
@@ -178,7 +222,7 @@ def save_quiz_title(message):
     
     bot.send_message(
         chat_id, 
-        f"✅ *Quiz Ka Naam Saved:* \"{quiz_title}\"\n\nAb select karein ki aap ise kis mode mein chalana chahte hain:", 
+        f"✅ *Quiz Successfully Created!*\n📌 *Category:* `{uploaded_quizzes[quiz_id]['category']}`\n📝 *Title:* \"{quiz_title}\"\n\nAb select karein ki aap ise kis mode mein chalana chahte hain:", 
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -380,11 +424,13 @@ def send_daily_revision(chat_id):
 def show_quiz_card(chat_id, quiz_id):
     quiz_data = uploaded_quizzes[quiz_id]
     title = quiz_data["title"]
+    category = quiz_data.get("category", "General")
     total_q = len(quiz_data["questions"])
     bot_username = bot.get_me().username
     
     card_text = (
-        f"🎲 *Quiz '{title}'*\n\n"
+        f"🎲 *Quiz '{title}'*\n"
+        f"📁 *Category:* `{category}`\n\n"
         f"📝 *{total_q} questions*\n"
         f"⏱ *30 sec* per question\n\n"
         f"👥 Tap on buttons below to play!"
@@ -420,10 +466,11 @@ def trigger_quiz_start(chat_id, quiz_id):
         
     user_sessions[chat_id] = {"quiz_id": quiz_id, "current_q": 0, "score": 0, "wrong": 0}
     quiz_title = uploaded_quizzes[quiz_id]["title"]
+    quiz_cat = uploaded_quizzes[quiz_id].get("category", "General")
     
     bot.send_message(chat_id, "🚀 *Quiz shuru ho raha hai...*")
     time.sleep(1.5)
-    bot.send_message(chat_id, f"📋 *Topic:* `{quiz_title}`\n\nAll the best! 👍", parse_mode="Markdown")
+    bot.send_message(chat_id, f"📁 *Category:* `{quiz_cat}`\n📋 *Topic:* `{quiz_title}`\n\nAll the best! 👍", parse_mode="Markdown")
     time.sleep(2)
     send_question(chat_id)
 
@@ -487,6 +534,7 @@ def show_result(chat_id):
     score = user_data["score"]
     quiz_id = user_data["quiz_id"]
     title = uploaded_quizzes[quiz_id]["title"]
+    category = uploaded_quizzes[quiz_id].get("category", "General")
     total = len(uploaded_quizzes[quiz_id]["questions"])
     
     correct = score
@@ -495,6 +543,7 @@ def show_result(chat_id):
     
     result_text = (
         f"🏁 *Quiz Poora Hua!*\n\n"
+        f"📁 *Category:* `{category}`\n"
         f"📌 *Topic:* `{title}`\n"
         f"📊 *Aapka Score Card:*\n"
         f"━━━━━━━━━━━━━━━━━━━\n"
@@ -508,17 +557,4 @@ def show_result(chat_id):
     if chat_id in user_sessions: 
         del user_sessions[chat_id]
 
-@bot.message_handler(commands=['quiz'])
-def menu_quiz_call(message):
-    chat_id = message.chat.id
-    quiz_id = f"q_{chat_id}"
-    if quiz_id in uploaded_quizzes:
-        show_quiz_card(chat_id, quiz_id)
-    else:
-        bot.send_message(chat_id, "⚠️ Mujhe koi active quiz nahi mila. Pehle ek file bhejiye! `/csv_to_quiz`")
-
-# --- 8. Server & Polling Execution ---
-if __name__ == "__main__":
-    set_bot_commands()
-    threading.Thread(target=run_flask, daemon=True).start()
-    bot.infinity_polling()
+@bot.messa
