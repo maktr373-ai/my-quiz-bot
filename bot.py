@@ -9,6 +9,7 @@ from telebot.types import BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime
 
+# --- 1. Flask Web Server Setup (Bot ko jagaye rakhne ke liye) ---
 app = Flask('')
 
 @app.route('/')
@@ -19,7 +20,8 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-BOT_TOKEN = "8943398504:AAGIjt1WrTe5wivSDU9tqtWSO97DM9FN2iQ" 
+# --- 2. Safe Token Configuration (Render Variable se chalega) ---
+BOT_TOKEN = os.environ.get("BOT_TOKEN") 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # Global data storage
@@ -42,6 +44,8 @@ def set_bot_commands():
         bot.set_my_commands(commands)
     except Exception as e:
         print(f"Menu error: {e}")
+
+# --- 3. Bot Command Handlers ---
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
@@ -179,6 +183,8 @@ def save_quiz_title(message):
         parse_mode="Markdown"
     )
 
+# --- 4. Mode Selection Buttons ---
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('mode_'))
 def handle_main_modes(call):
     chat_id = call.message.chat.id
@@ -231,6 +237,7 @@ def handle_practice_menu(call):
         parse_mode="Markdown"
     )
 
+# --- 5. ⚡ FLASH QUIZ FUNCTIONALITY ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('flash_run_'))
 def run_flash_quiz(call):
     chat_id = call.message.chat.id
@@ -263,6 +270,7 @@ def run_flash_quiz(call):
         except:
             pass
 
+# --- 6. 🔄 REVISION MODE SETUP & SCHEDULER ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('revision_setup_'))
 def setup_revision_mode(call):
     chat_id = call.message.chat.id
@@ -368,6 +376,7 @@ def send_daily_revision(chat_id):
     config["current_pointer"] = end_pointer
     revision_configs[chat_id] = config
 
+# --- 7. ⚙️ STANDARD MODE CORE FUNCTIONALITY ---
 def show_quiz_card(chat_id, quiz_id):
     quiz_data = uploaded_quizzes[quiz_id]
     title = quiz_data["title"]
@@ -508,6 +517,7 @@ def menu_quiz_call(message):
     else:
         bot.send_message(chat_id, "⚠️ Mujhe koi active quiz nahi mila. Pehle ek file bhejiye! `/csv_to_quiz`")
 
+# --- 8. Server & Polling Execution ---
 if __name__ == "__main__":
     set_bot_commands()
     threading.Thread(target=run_flask, daemon=True).start()
